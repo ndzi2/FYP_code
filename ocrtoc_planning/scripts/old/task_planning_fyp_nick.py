@@ -100,6 +100,133 @@ class TaskPlanner(object):
         print("goal cartesian poses dictionary: {}".format(self._goal_cartesian_pose_dic))
         print("task planner constructed")
 
+        motion_config_path = os.path.join(rospack.get_path('ocrtoc_planning'), 'config/motion_planner_parameter.yaml')
+        with open(motion_config_path, "r") as f:
+            config_parameters = yaml.load(f)
+            self._group_name = config_parameters["group_name"]
+        moveit_commander.roscpp_initialize(sys.argv)
+        self._scene = moveit_commander.PlanningSceneInterface()
+        self._scene.clear()
+        self._robot = moveit_commander.RobotCommander()
+        rospy.sleep(1)
+        self.add_obstacle_to_moveit_scene()
+        self.object_being_held = None
+
+    def check_moveit(self, object_name=None):
+        """
+            This function was taken from https://ros-planning.github.io/moveit_tutorials/doc/move_group_python_interface/move_group_python_interface_tutorial.html
+        """
+        if object_name == None:
+            object_name = self.object_being_held
+        while not rospy.is_shutdown():
+            # Test if the box is in attached objects
+            attached_objects = self._scene.get_attached_objects([object_name])
+            is_attached = len(attached_objects.keys()) > 0
+
+            # Test if the box is in the scene.
+            # Note that attaching the box will remove it from known_objects
+            is_known = object_name in self._scene.get_known_object_names()
+
+            # Test if we are in the expected state
+            if (is_attached) or (is_known):
+                return True
+
+            # Sleep so that we give other threads time on the processor
+            rospy.sleep(0.1)
+
+        # If we exited the while loop without returning then we timed out
+        return False
+
+    def create_pose(self, object_pose, frame='world'):
+        p = PoseStamped()
+        p.header.frame_id = self._robot.get_planning_frame()
+
+        p.pose.position.x = object_pose.position.x
+        p.pose.position.y = object_pose.position.y
+        p.pose.position.z = object_pose.position.z
+
+        p.pose.orientation.x = object_pose.orientation.x
+        p.pose.orientation.y = object_pose.orientation.y
+        p.pose.orientation.z = object_pose.orientation.z
+        p.pose.orientation.w = object_pose.orientation.w
+
+        return p
+
+    def add_obstacle_to_moveit_scene(self):
+        p = PoseStamped()
+        p.header.frame_id = self._robot.get_planning_frame()
+
+        p.pose.position.x = 0
+        p.pose.position.y = 0.3
+        p.pose.position.z = 0.0750
+        p.pose.orientation.w = 1
+        self._scene.add_box('box1', p, size=(0.350, 0.003, 0.150))
+
+        p.pose.position.y = 0.6
+        self._scene.add_box('box2', p, size=(0.350, 0.003, 0.150))
+
+        p.pose.position.x = 0.175
+        p.pose.position.y = 0.45
+        p.pose.position.z = 0.0750
+        p.pose.orientation.w = 1
+        self._scene.add_box('box3', p, size=(0.003, 0.3, 0.150))
+
+        p.pose.position.x = -0.175
+        self._scene.add_box('box4', p, size=(0.003, 0.3, 0.150))
+
+
+    # adding objects to the moveit scene to make sure the robot does not collide with objects
+    def add_objects_to_moveit_scene(self, object_name, object_pose):
+
+        print('adding ' + object_name + ' to the moveit scene')
+        p = self.create_pose(object_pose)
+
+        #print(object_name)
+        object_file = '/root/ocrtoc_ws/src/ocrtoc_materials/models/' + object_name + '/collision.obj'
+        #print(object_file)
+
+        self._scene.add_mesh(object_name, p, object_file, size=(1,1,1))
+
+        if(self.check_moveit(object_name)):
+            rospy.loginfo('successfuly updated moveit scene')
+        else:
+            rospy.loginfo('could not update moveit scene')
+
+        print('finished adding ' + object_name + ' to the moveit scene successfully')
+
+# TODO: finish writing the following two functions
+
+    # attach object when picking it up
+    def attach_object_to_gripper(self, object_name, object_pose):
+        self.object_being_held = object_name
+        self._scene.remove_world_object(self.object_being_held)
+        p = self.create_pose(object_pose)
+        object_file = '/root/ocrtoc_ws/src/ocrtoc_materials/models/' + self.object_being_held + '/collision.obj'
+
+        print('attaching {} to gripper'.format(self.object_being_held))
+        grasping_group = "hand"
+        touch_links = self._robot.get_link_names(group=grasping_group)
+        self._scene.attach_mesh('panda_ee_link', self.object_being_held, p, object_file, size=(1,1,1), touch_links=touch_links)
+
+        if(self.check_moveit(object_name)):
+            rospy.loginfo('successfuly updated moveit scene')
+        else:
+            rospy.loginfo('could not update moveit scene')
+        print('successfully attached {} to gripper'.format(self.object_being_held))
+
+    # detaching object when placing it down
+    def detach_object_from_gripper(self):
+        # remove the object from the gripper
+        # add the object to the scene
+        print('detaching {} to gripper'.format(self.object_being_held))
+        self._scene.remove_attached_object()
+
+        if(self.check_moveit()):
+            rospy.loginfo('successfuly updated moveit scene')
+        else:
+            rospy.loginfo('could not update moveit scene')
+        print('successfully detached {} to gripper'.format(self.object_being_held))
+
     def simplify_task(self, goal_cartesian_poses, blocks):
         # Original
         self._goal_cartesian_poses = []
@@ -563,7 +690,11 @@ class TaskPlanner(object):
 
         for result in perception_result.perception_result_list:
 
-            if result.be_recognized and (result.object_name != 'clear_box_1'):
+            print('adding found objects to the planning scene')
+            self.add_objects_to_moveit_scene(result.object_name, result.object_pose.pose)
+            print('finished adding objects to the planning scene')
+
+            if result.be_recognized: # and result.is_graspable:
                 self._available_cartesian_pose_dic[result.object_name] = result.object_pose.pose
                 print('object name: {0}, frame id: {1}, cartesian pose: {2}'.format(result.object_name, result.object_pose.header.frame_id, result.object_pose.pose))
             else:
@@ -628,7 +759,7 @@ class TaskPlanner(object):
                 grasp_euler = self._transformer.ros_quaternion_to_euler(grasp_pose.orientation)
                 print("grasp_euler: ", grasp_euler)
                 if block == "orion_pie":
-                    grasp_yaw = math.pi/4 + grasp_euler[2]
+                    grasp_yaw = math.pi*3/4 + grasp_euler[2]
                 else:
                     grasp_yaw = math.pi*3/4 + grasp_euler[2] - grasp_euler[0]
                 grasp_orientation = self.RPY2Quar(0, math.pi, grasp_yaw)
@@ -653,7 +784,7 @@ class TaskPlanner(object):
 
                 # pre-place pose
                 pre_place_pose = self.pose_copy(place_pose)
-                pre_place_pose.position.z = 0.2
+                pre_place_pose.position.z = 0.3
 
                 # grasp object
                 print("-"*80)
@@ -666,13 +797,17 @@ class TaskPlanner(object):
                 print("-"*80)
                 print("grasp_pose")
                 self.go_to_pose(grasp_pose)
+
+                # attach the object to gripper in moveit scene
+                print('attempting to add {} to hand'.format(self._target_pick_object))
+                self.attach_object_to_gripper(str(block), object_pose)
                 print("g.close")
                 g.close()
                 time.sleep(1)
 
                 # lift arm
                 temp_pose = self.pose_copy(grasp_pose)
-                temp_pose.position.z = 0.2
+                temp_pose.position.z = 0.3
                 print("-"*80)
                 print("temp_pose")
                 self.go_to_pose(temp_pose)
@@ -687,6 +822,7 @@ class TaskPlanner(object):
                 print("place_pose")
                 self.go_to_pose(place_pose)
                 print("g.open")
+                self.detach_object_from_gripper()
                 g.open()
                 time.sleep(1)
 
@@ -924,6 +1060,8 @@ class TaskPlanner(object):
             block, pose, _ = args
             holding = None
             block_poses[block] = pose
+            # detach the object from gripper in moveit scene
+            self.detach_object_from_gripper()
             print('nothing in hand')
             self._motion_planner.place()
             self._last_gripper_action = name

@@ -15,6 +15,7 @@ from copy import deepcopy
 
 from .arm_controller import ArmController
 from .graspnet import GraspNetBaseLine
+from .graspnet.graspnet_baseline import vis_grasps
 from .pose.pose_6d import get_6d_pose_by_geometry, load_model_pcd
 from .pose.pose_correspondence import get_pose_superglue
 
@@ -32,7 +33,7 @@ def crop_pcd(pcds, i, reconstruction_config):
     mask = mask & (points[:, 1] > reconstruction_config['y_min'])
     pcd = o3dp.array2pcd(points[mask], colors[mask])
     return pcd
-
+    
 def kinect_process_pcd(pcd, reconstruction_config):
     points, colors = o3dp.pcd2array(pcd)
     mask = points[:, 2] > reconstruction_config['z_min']
@@ -87,7 +88,7 @@ def process_pcds(pcds, use_camera, reconstruction_config):
         cd = pcd.voxel_down_sample(voxel_size)
         pcd.estimate_normals()
     return trans, pcd
-
+    
 class Perceptor():
     def __init__(
         self,
@@ -298,6 +299,7 @@ class Perceptor():
 
         # generating grasp poses.
         gg = self.graspnet_baseline.inference(grasp_pcd)
+        vis_grasps(gg, grasp_pcd)
         gg.translations = -gg.translations
         gg.rotation_matrices = -gg.rotation_matrices
         gg.translations = gg.translations + gg.rotation_matrices[:, :, 0] * self.config['graspnet']['refine_approach_dist']

@@ -97,7 +97,10 @@ class MotionPlanner(object):
     # move to specified home pose
     def to_home_pose(self):
         self._move_group.set_joint_value_target(self._home_joints)
-        to_home_result = self._move_group.go()
+        # self._move_group.set_pose_target(self._home_joints)
+        to_home_result = self._move_group.go(wait=True)
+        # self._move_group.stop()
+        # self._move_group.clear_pose_targets()
         rospy.sleep(1.0)
         print('to home pose result:{}'.format(to_home_result))
         return to_home_result

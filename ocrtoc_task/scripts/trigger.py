@@ -87,7 +87,7 @@ if __name__ == '__main__':
 
     # 3.Waits for the user solution to finish performing the action.
     finished_before_timeout = False
-    threshold = 600.0  # seconds.
+    threshold = 900.0  # seconds.
     finished_before_timeout = \
         task_manager.wait_for_result(rospy.Duration(threshold))
     if finished_before_timeout:

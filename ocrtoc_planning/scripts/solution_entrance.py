@@ -3,7 +3,7 @@
 import actionlib
 import rospy
 import ocrtoc_msg.msg
-from task_planning import TaskPlanner
+from task_planning_fyp_nick import TaskPlanner
 
 class SolutionServer(object):
     def __init__(self, name):
@@ -29,7 +29,7 @@ class SolutionServer(object):
 
         # start task planning
         self.planner = TaskPlanner(blocks, goal_cartesian_poses)
-        self.planner.cycle_plan_all()
+        self.planner.cycle_plan_all_top_down()
         rospy.loginfo("planning finished")
 
         # Example: set status "Aborted" and quit.

@@ -28,6 +28,9 @@ planner_configs:
     type: geometric::RRT
     range: 0.0  # Max motion added to tree. ==> maxDistance_ default: 0.0, if 0.0, set on setup()
     goal_bias: 0.05  # When close to goal select goal, with this probability? default: 0.05
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0  # Max motion added to tree. ==> maxDistance_ default: 0.0, if 0.0, set on setup()
   RRTstarkConfigDefault:
     type: geometric::RRTstar
     range: 0.0  # Max motion added to tree. ==> maxDistance_ default: 0.0, if 0.0, set on setup()
@@ -128,6 +131,7 @@ panda_arm:
     - BKPIECEkConfigDefault
     - KPIECEkConfigDefault
     - RRTkConfigDefault
+    - RRTConnectkConfigDefault
     - RRTstarkConfigDefault
     - TRRTkConfigDefault
     - PRMkConfigDefault
@@ -153,6 +157,7 @@ panda_arm_hand:
     - BKPIECEkConfigDefault
     - KPIECEkConfigDefault
     - RRTkConfigDefault
+    - RRTConnectkConfigDefault
     - RRTstarkConfigDefault
     - TRRTkConfigDefault
     - PRMkConfigDefault
@@ -178,6 +183,7 @@ hand:
     - BKPIECEkConfigDefault
     - KPIECEkConfigDefault
     - RRTkConfigDefault
+    - RRTConnectkConfigDefault
     - RRTstarkConfigDefault
     - TRRTkConfigDefault
     - PRMkConfigDefault

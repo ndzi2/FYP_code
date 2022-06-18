@@ -17,6 +17,7 @@ import rospkg
 import rospy
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'pddlstream'))
+
 from pddlstream.algorithms.focused import solve_focused
 from pddlstream.algorithms.incremental import solve_incremental
 from pddlstream.language.constants import And, Equal, TOTAL_COST, print_solution
@@ -27,16 +28,11 @@ from pddlstream.utils import user_input, read, INF
 from primitives import GRASP, collision_test, distance_fn, DiscreteTAMPState, get_shift_one_problem, get_shift_all_problem
 from viewer import DiscreteTAMPViewer, COLORS
 
-### FYP ###
-from ocrtoc_common.gripper_interface import GripperInterface
-from ocrtoc_common.srv import *
-import time
-import math
 import moveit_commander
+
 
 class TaskPlanner(object):
     """Plan object operation sequence for the whole task.
-
     Receive the names and target poses of target objects. Get the current poses of target objects by calling the
     perception node. Then plan the sequence operate the list of objects. Finally, complete each object operation
     with the class called MotionPlanner.
@@ -44,7 +40,6 @@ class TaskPlanner(object):
 
     def __init__(self, blocks=[], goal_cartesian_poses=[]):
         """Inits TaskPlanner with object names and corresponding target poses.
-
         :param blocks: A list of object names
         :param goal_cartesian_poses: A list of target poses of objects
         """
@@ -77,7 +72,7 @@ class TaskPlanner(object):
         self._blocks = blocks
         self._initial_cartesian_poses = []
         self._current_block_poses = {}
-        self.simplify_task(goal_cartesian_poses,blocks)
+        self.simplify_task(goal_cartesian_poses)
         self._n_blocks = len(blocks)
         self._temp_block_poses = []
         self._temp_cartesian_poses = []
@@ -95,69 +90,31 @@ class TaskPlanner(object):
         self._n_available_grasp_pose = 1
         self._last_gripper_action = 'place'
         self._target_pick_object = None
+
+        motion_config_path = os.path.join(rospack.get_path('ocrtoc_planning'), 'config/motion_planner_parameter.yaml')
+        with open(motion_config_path, "r") as f:
+            config_parameters = yaml.load(f)
+            self._group_name = config_parameters["group_name"]
+        moveit_commander.roscpp_initialize(sys.argv)
+        self._scene = moveit_commander.PlanningSceneInterface()
+        self._scene.clear()
+        self._robot = moveit_commander.RobotCommander()
+        rospy.sleep(1)
+        self.add_obstacle_to_moveit_scene()
+        self.object_being_held = None
+
         print("number of blocks: {}".format(self._n_blocks))
         print("blocks: {}".format(self._blocks))
         print("goal cartesian poses dictionary: {}".format(self._goal_cartesian_pose_dic))
         print("task planner constructed")
 
-    def simplify_task(self, goal_cartesian_poses, blocks):
-        # Original
+    def simplify_task(self, goal_cartesian_poses):
         self._goal_cartesian_poses = []
         for i in goal_cartesian_poses:
             self._goal_cartesian_poses.append(i.poses[0])
 
-        print("+"*80)
-        print("goal_cartesian_poses:",goal_cartesian_poses)
-        print("_goal_cartesian_poses:",self._goal_cartesian_poses)
-        print("blocks: {}".format(self._blocks))
-        print("+"*80)
-
-
-        # # Test Code 1
-        # self._goal_cartesian_poses = []
-        # self._blocks = []
-
-        # idx = 0
-        # for i in goal_cartesian_poses:
-        #     idx2 = 0
-        #     for j in i.poses:
-        #         if idx2>0:
-        #             self._blocks.append(blocks[idx]+str(idx2))
-        #         else:
-        #             self._blocks.append(blocks[idx])
-        #         idx2 = idx2 + 1
-
-        #         self._goal_cartesian_poses.append(j)
-        #         print("..:",j)
-        #     idx = idx + 1
-        # self._n_blocks = len(self._blocks)
-
-        # # Test Code 2
-        # self._goal_cartesian_poses = []
-        # self._blocks = []
-        # self._blocks2 = []
-
-        # idx = 0
-        # for i in goal_cartesian_poses:
-        #     idx2 = 0
-        #     for j in i.poses:
-        #         self._blocks.append(blocks[idx])
-
-        #         if idx2>0:
-        #             self._blocks2.append(blocks[idx]+str(idx2))
-        #         else:
-        #             self._blocks2.append(blocks[idx])
-        #         idx2 = idx2 + 1
-
-        #         self._goal_cartesian_poses.append(j)
-        #         print("..:",j)
-        #     idx = idx + 1
-        # self._n_blocks = len(self._blocks)
-
-
     def get_pose_perception(self, target_object_list):
         """Get current poses of target objects from perception node.
-
         :param target_object_list: A list of target object names
         """
 
@@ -184,7 +141,12 @@ class TaskPlanner(object):
         rospy.loginfo(str(len(perception_result.perception_result_list)) + ' objects are graspable:')
         rospy.loginfo('Graspable objects information: ')
 
+        # self.add_obstacle_to_moveit_scene()
         for result in perception_result.perception_result_list:
+
+            print('adding found objects to the planning scene')
+            self.add_objects_to_moveit_scene(result.object_name, result.object_pose.pose)
+            print('finished adding objects to the planning scene')
 
             if result.be_recognized and result.is_graspable:
                 self._available_cartesian_pose_dic[result.object_name] = result.object_pose.pose
@@ -335,6 +297,11 @@ class TaskPlanner(object):
     # construct pose transformation of initial objects
     def available_pose_transformation(self):
         sorted_available_cartesian_pose_list = sorted(self._available_cartesian_pose_dic.items(), key=lambda obj: obj[1].position.z)
+
+        print('##################################################')
+        print(self._available_cartesian_pose_dic)
+        print('##################################################')
+
         print("sorted available cartesian pose list element: {}".format(sorted_available_cartesian_pose_list[0]))
         print("sub element1: {0}, sub element2: {1}".format(sorted_available_cartesian_pose_list[0][0], sorted_available_cartesian_pose_list[0][1]))
         blocks_x = 0
@@ -355,13 +322,6 @@ class TaskPlanner(object):
                     else:
                         pass
 
-        #####
-
-
-
-
-        #####
-
         print("available block pose dictionary: {}".format(self._available_block_pose_dic))
 
         # generate object/pose inverse mapping
@@ -378,10 +338,6 @@ class TaskPlanner(object):
         blocks_x = self._n_blocks
         # construct 2d pose for target object cartesian pose
         sorted_goal_cartesian_pose_list = sorted(self._goal_cartesian_pose_dic.items(), key=lambda obj: obj[1].position.z)
-        print("-"*20)
-        print(sorted_goal_cartesian_pose_list)
-        print("-"*20)
-
         for i in range(len(sorted_goal_cartesian_pose_list)):
             if i == 0:
                 self._goal_block_pose_dic[sorted_goal_cartesian_pose_list[0][0]] = np.array([blocks_x, 0])
@@ -416,12 +372,13 @@ class TaskPlanner(object):
     # get poses of part of objects each call of perception node, call perception node and plan task several times
     def cycle_plan_all(self):
         """Plan object operation sequence and execute operations recurrently.
-
         logical process:
         1 get all objects goal poses
         2 get current objects poses
         # 3 compare current objects poses and goal poses
+        3.1 add the current objects poses to the moveit scene
         4 plan task sequence of current relative objects
+            this should include checking if objects are in the pose of the goal object
         5 task execution
         6 delete already planned objects from goal objects list and check goal objects list is empty
         7 if goal objects list is empty, stop planning, otherwise, go to step 2
@@ -430,7 +387,7 @@ class TaskPlanner(object):
         print("enter cycle_plan_all function")
         # transform goal cartesian pose to 2d space
         self.goal_pose_transformation()
-        # print(self._goal_block_pose_dic["orion_pie"])
+
         # TODO check task result???
         left_object_dic = self._goal_block_pose_dic
         while len(left_object_dic) != 0:
@@ -478,234 +435,120 @@ class TaskPlanner(object):
 
             print('left objects: {}'.format(left_object_dic))
 
-    ########## FYP ##########
-    def go_to_pose(self, goal):
-        request = PoseGoalRequest()
-        request.goal = goal
-
-        # qw,qx,qy,qz = RPY2Quar(pose[3],pose[4],pose[5]);
-        # request.goal.position.x = pose[0]
-        # request.goal.position.y = pose[1]
-        # request.goal.position.z = pose[2]
-        # request.goal.orientation.x = qx
-        # request.goal.orientation.y = qy
-        # request.goal.orientation.z = qz
-        # request.goal.orientation.w = qw
-        # print("pose [x,y,z,roll,pitch,yaw]:",goal)
-
-        # print("-"*80)
-        print(request.goal)
-        # print("-"*80)
-        rospy.wait_for_service('/send_pose_goal')
-        try:
-            service_call = rospy.ServiceProxy('/send_pose_goal', PoseGoal)
-            response = service_call(request)
-            print(response)
-        except rospy.ServiceException as e:
-            print("Service call failed: %s"%e)
-
-    def RPY2Quar(self, roll, pitch, yaw):
-        sr = math.sin(roll*0.5)
-        cr = math.cos(roll*0.5)
-        sp = math.sin(pitch*0.5)
-        cp = math.cos(pitch*0.5)
-        sy = math.sin(yaw*0.5)
-        cy = math.cos(yaw*0.5)
-
-        q = Quaternion()
-        q.w = cy * cp * cr + sy * sp * sr
-        q.x = cy * cp * sr - sy * sp * cr
-        q.y = sy * cp * sr + cy * sp * cr
-        q.z = sy * cp * cr - cy * sp * sr
-
-        return q
-
-    def pose_copy(self,pose1):
-        pose2 = Pose()
-        pose2.position.x = pose1.position.x
-        pose2.position.y = pose1.position.y
-        pose2.position.z = pose1.position.z
-        pose2.orientation.x = pose1.orientation.x
-        pose2.orientation.y = pose1.orientation.y
-        pose2.orientation.z = pose1.orientation.z
-        pose2.orientation.w = pose1.orientation.w
-        return pose2
-
-    def get_pose_perception_top_down(self, target_object_list):
-        """Get current poses of target objects from perception node.
-
-        :param target_object_list: A list of target object names
+    def check_moveit(self, object_name=None):
         """
+            This function was taken from https://ros-planning.github.io/moveit_tutorials/doc/move_group_python_interface/move_group_python_interface_tutorial.html
+        """
+        if object_name == None:
+            object_name = self.object_being_held
+        while not rospy.is_shutdown():
+            # Test if the box is in attached objects
+            attached_objects = self._scene.get_attached_objects([object_name])
+            is_attached = len(attached_objects.keys()) > 0
 
-        # perception service message:
-        # string[] target_object_list
-        # ---
-        # ocrtoc_perception/PerceptionResult[] perception_result_list
-        # ocrtoc_perception/PerceptionResult.msg
-        # string object_name
-        # bool be_recognized
-        # geometry_msgs/PoseStamped object_pose
-        # bool is_graspable
-        # geometry_msgs/PoseStamped grasp_pose
-        rospy.wait_for_service('/perception_action_target')
-        request_msg = PerceptionTargetRequest()
-        request_msg.target_object_list = target_object_list
-        rospy.loginfo('Start to call perception node')
-        perception_result = self._service_get_target_pose(request_msg)
-        print("perception_result")
-        print(perception_result)
-        rospy.loginfo('Perception finished')
+            # Test if the box is in the scene.
+            # Note that attaching the box will remove it from known_objects
+            is_known = object_name in self._scene.get_known_object_names()
 
+            # Test if we are in the expected state
+            if (is_attached) or (is_known):
+                return True
 
-        self._available_cartesian_pose_dic.clear()
-        rospy.loginfo(str(len(perception_result.perception_result_list)) + ' objects are graspable:')
-        rospy.loginfo('Graspable objects information: ')
+            # Sleep so that we give other threads time on the processor
+            rospy.sleep(0.1)
 
-        for result in perception_result.perception_result_list:
+        # If we exited the while loop without returning then we timed out
+        return False
 
-            if result.be_recognized and (result.object_name != 'clear_box_1'):
-                self._available_cartesian_pose_dic[result.object_name] = result.object_pose.pose
-                print('object name: {0}, frame id: {1}, cartesian pose: {2}'.format(result.object_name, result.object_pose.header.frame_id, result.object_pose.pose))
-            else:
-                pass
+    def create_pose(self, object_pose, frame='world'):
+        p = PoseStamped()
+        p.header.frame_id = self._robot.get_planning_frame()
 
-    def cycle_plan_all_top_down(self):
+        p.pose.position.x = object_pose.position.x
+        p.pose.position.y = object_pose.position.y
+        p.pose.position.z = object_pose.position.z
 
-        print("enter cycle_plan_all_top_down function")
-        # transform goal cartesian pose to 2d space
-        self.goal_pose_transformation()
-        # print(self._goal_block_pose_dic["orion_pie"])
+        p.pose.orientation.x = object_pose.orientation.x
+        p.pose.orientation.y = object_pose.orientation.y
+        p.pose.orientation.z = object_pose.orientation.z
+        p.pose.orientation.w = object_pose.orientation.w
 
-        print("+"*80)
-        print("self._goal_block_pose_dic")
-        print(self._goal_block_pose_dic)
-        print("+"*80)
+        return p
 
-        left_object_dic = self._goal_block_pose_dic
-        while len(left_object_dic) != 0:
-            # get left objects information
-            rospy.loginfo('Try to get information of left objects from perception node')
-            self.get_pose_perception_top_down(left_object_dic.keys())  # get pose from perception
-            # self.get_fake_pose_perception(left_object_dic.keys())  # get pose from simulation environment
+    def add_obstacle_to_moveit_scene(self):
+        p = PoseStamped()
+        p.header.frame_id = self._robot.get_planning_frame()
 
-            # if no availabe object information get, call perception node again until the number of repeat call reach max_repeat_call
-            if len(self._available_cartesian_pose_dic) == 0:
-                rospy.loginfo('Nothing get from perception, but the information of the following objects have never been gotten. Call perpectp again 3 seconds later')
-                print('left objects: {}'.format(left_object_dic.keys()))
-                rospy.sleep(3.0)
-                self._n_repeat_call += 1
-                if self._n_repeat_call >= self._max_repeat_call:
-                    rospy.loginfo('Call perception node' + str(self._max_repeat_call) + 'times, but nothing get')
-                    rospy.loginfo('Task failed, Information of the following objects can not be obtained: ')
-                    print(left_object_dic.keys())
-                    break
-                else:
-                    continue
+        p.pose.position.x = 0
+        p.pose.position.y = 0.3
+        p.pose.position.z = 0.0750
+        p.pose.orientation.w = 1
+        self._scene.add_box('box1', p, size=(0.350, 0.003, 0.150))
 
-            print("+"*80)
-            print("self._available_cartesian_pose_dic")
-            print(self._available_cartesian_pose_dic)
-            print("self._goal_block_pose_dic")
-            print(self._goal_block_pose_dic)
-            print("+"*80)
+        p.pose.position.y = 0.6
+        self._scene.add_box('box2', p, size=(0.350, 0.003, 0.150))
 
-            # g = GripperInterface(topic_name = '/franka_gripper/gripper_action')
-            g = GripperInterface()
+        p.pose.position.x = 0.175
+        p.pose.position.y = 0.45
+        p.pose.position.z = 0.0750
+        p.pose.orientation.w = 1
+        self._scene.add_box('box3', p, size=(0.003, 0.3, 0.150))
 
-            for block in self._available_cartesian_pose_dic.keys():
-                object_pose = self._available_cartesian_pose_dic[block]
-                target_pose = self._goal_cartesian_pose_dic[block]
-                print("*"*80)
-                print("object_pose",object_pose)
-                print("target_pose",target_pose)
-                print("*"*80)
-
-                # grasp pose
-                grasp_pose = self.pose_copy(object_pose)
-                grasp_pose.position.z = grasp_pose.position.z + 0.15
-                if grasp_pose.position.z < 0.17:
-                    grasp_pose.position.z = 0.17
-                grasp_euler = self._transformer.ros_quaternion_to_euler(grasp_pose.orientation)
-                print("grasp_euler: ", grasp_euler)
-                if block == "orion_pie":
-                    grasp_yaw = math.pi/4 + grasp_euler[2]
-                else:
-                    grasp_yaw = math.pi*3/4 + grasp_euler[2] - grasp_euler[0]
-                grasp_orientation = self.RPY2Quar(0, math.pi, grasp_yaw)
-                grasp_pose.orientation = grasp_orientation
-                print("grasp_orientation: ", 0, math.pi, grasp_yaw)
-
-                # pre-grasp pose
-                pre_grasp_pose = self.pose_copy(grasp_pose)
-                pre_grasp_pose.position.z = 0.3
-
-                # place pose
-                place_pose = self.pose_copy(target_pose)
-                place_pose.position.z = place_pose.position.z + 0.16
-                if place_pose.position.z < 0.18:
-                    place_pose.position.z = 0.18
-                place_euler = self._transformer.ros_quaternion_to_euler(place_pose.orientation)
-                print("place_euler: ", place_euler)
-                place_yaw = math.pi*3/4 + place_euler[2] - place_euler[0]
-                place_orientation = self.RPY2Quar(0, math.pi, place_yaw)
-                place_pose.orientation = place_orientation
-                print("place_orientation: ", 0, math.pi, place_yaw)
-
-                # pre-place pose
-                pre_place_pose = self.pose_copy(place_pose)
-                pre_place_pose.position.z = 0.2
-
-                # grasp object
-                print("-"*80)
-                print("pre_grasp_pose")
-                self.go_to_pose(pre_grasp_pose)
-                print("g.open")
-                g.open()
-                time.sleep(1)
-
-                print("-"*80)
-                print("grasp_pose")
-                self.go_to_pose(grasp_pose)
-                print("g.close")
-                g.close()
-                time.sleep(1)
-
-                # lift arm
-                temp_pose = self.pose_copy(grasp_pose)
-                temp_pose.position.z = 0.2
-                print("-"*80)
-                print("temp_pose")
-                self.go_to_pose(temp_pose)
-                time.sleep(1)
-
-                # place object
-                print("-"*80)
-                print("pre_place_pose")
-                self.go_to_pose(pre_place_pose)
-                time.sleep(1)
-                print("-"*80)
-                print("place_pose")
-                self.go_to_pose(place_pose)
-                print("g.open")
-                g.open()
-                time.sleep(1)
-
-                # lift arm
-                temp_pose = self.pose_copy(place_pose)
-                temp_pose.position.z = 0.5
-                print("-"*80)
-                print("temp_pose")
-                self.go_to_pose(temp_pose)
-                time.sleep(1)
-                print("-"*80)
+        p.pose.position.x = -0.175
+        self._scene.add_box('box4', p, size=(0.003, 0.3, 0.150))
 
 
-            # delete completed task, update left objects list
-            for block in self._available_cartesian_pose_dic.keys():
-                del left_object_dic[block]
-            print("="*80)
-            print('left objects: {}'.format(left_object_dic))
-    ########## END FYP ##########
+    # adding objects to the moveit scene to make sure the robot does not collide with objects
+    def add_objects_to_moveit_scene(self, object_name, object_pose):
+
+        print('adding ' + object_name + ' to the moveit scene')
+        p = self.create_pose(object_pose)
+
+        #print(object_name)
+        object_file = '/root/ocrtoc_ws/src/ocrtoc_materials/models/' + object_name + '/collision.obj'
+        #print(object_file)
+
+        self._scene.add_mesh(object_name, p, object_file, size=(1,1,1))
+
+        if(self.check_moveit(object_name)):
+            rospy.loginfo('successfuly updated moveit scene')
+        else:
+            rospy.loginfo('could not update moveit scene')
+
+        print('finished adding ' + object_name + ' to the moveit scene successfully')
+
+# TODO: finish writing the following two functions
+
+    # attach object when picking it up
+    def attach_object_to_gripper(self, object_name, object_pose):
+        self.object_being_held = object_name
+        self._scene.remove_world_object(self.object_being_held)
+        p = self.create_pose(object_pose)
+        object_file = '/root/ocrtoc_ws/src/ocrtoc_materials/models/' + self.object_being_held + '/collision.obj'
+
+        print('attaching {} to gripper'.format(self.object_being_held))
+        grasping_group = "hand"
+        touch_links = self._robot.get_link_names(group=grasping_group)
+        self._scene.attach_mesh('panda_ee_link', self.object_being_held, p, object_file, size=(1,1,1), touch_links=touch_links)
+
+        if(self.check_moveit(object_name)):
+            rospy.loginfo('successfuly updated moveit scene')
+        else:
+            rospy.loginfo('could not update moveit scene')
+        print('successfully attached {} to gripper'.format(self.object_being_held))
+
+    # detaching object when placing it down
+    def detach_object_from_gripper(self):
+        # remove the object from the gripper
+        # add the object to the scene
+        print('detaching {} to gripper'.format(self.object_being_held))
+        self._scene.remove_attached_object()
+
+        if(self.check_moveit()):
+            rospy.loginfo('successfuly updated moveit scene')
+        else:
+            rospy.loginfo('could not update moveit scene')
+        print('successfully detached {} to gripper'.format(self.object_being_held))
 
     # task planning and execution of objects that are currently available and in the list of goal objects
     def target_objects_task_planning(self):
@@ -745,6 +588,8 @@ class TaskPlanner(object):
 
         # get all pose information in simulation environment
         self.get_pose_perception(self._blocks)
+
+        self._motion_planner.to_home_pose()
 
         # transpose initial and target pose of all objects to 2d space
         self.goal_pose_transformation()
@@ -859,8 +704,8 @@ class TaskPlanner(object):
                 grasp_pose = self._pose_mapping[str_pose][self._available_grasp_pose_index[self._target_pick_object]]
                 # plan_result = self._motion_planner.move_cartesian_space(grasp_pose)  # move in cartesian straight path
                 # plan_result = self._motion_planner.move_cartesian_space_discrete(grasp_pose)  # move in cartesian discrete path
-                # self._motion_planner.to_home_pose()
                 plan_result = self._motion_planner.move_cartesian_space_upright(grasp_pose)  # move in cartesian discrete upright path
+                # plan_result = self._motion_planner.move_joint_space(grasp_pose)
                 if plan_result:
                     print('Move to the target position of object {} successfully, going to place it'.format(self._target_pick_object))
                 else:
@@ -871,8 +716,8 @@ class TaskPlanner(object):
                 for index in range(self._start_grasp_index if self._start_grasp_index >= 0 else 0, self._end_grasp_index if self._end_grasp_index <= len(self._pose_mapping[str_pose]) else len(self._pose_mapping[str_pose])):
                     # plan_result = self._motion_planner.move_cartesian_space(self._pose_mapping[str_pose][index], self._pick_via_up)
                     # plan_result = self._motion_planner.move_cartesian_space_discrete(self._pose_mapping[str_pose][index], self._pick_via_up)
-                    # self._motion_planner.to_home_pose()
                     plan_result = self._motion_planner.move_cartesian_space_upright(self._pose_mapping[str_pose][index], self._pick_via_up)
+                    # plan_result = self._motion_planner.move_joint_space(self._pose_mapping[str_pose][index])
                     if plan_result:
                         self._available_grasp_pose_index[self._target_pick_object] = index
                         rospy.loginfo('available grasp pose index: ' + str(index))
@@ -918,12 +763,17 @@ class TaskPlanner(object):
             del block_poses[holding]
             self._motion_planner.pick()
             self._last_gripper_action = name
+            # attach the object to gripper in moveit scene
+            print('attempting to add {} to hand'.format(self._target_pick_object))
+            self.attach_object_to_gripper(self._target_pick_object, self._available_cartesian_pose_dic[self._target_pick_object])
             print('{} is in hand now'.format(self._target_pick_object))
         elif name == 'place':
             rospy.loginfo('place')
             block, pose, _ = args
             holding = None
             block_poses[block] = pose
+            # detach the object from gripper in moveit scene
+            self.detach_object_from_gripper()
             print('nothing in hand')
             self._motion_planner.place()
             self._last_gripper_action = name

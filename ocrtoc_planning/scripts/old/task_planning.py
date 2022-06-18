@@ -653,7 +653,7 @@ class TaskPlanner(object):
 
                 # pre-place pose
                 pre_place_pose = self.pose_copy(place_pose)
-                pre_place_pose.position.z = 0.2
+                pre_place_pose.position.z = 0.3
 
                 # grasp object
                 print("-"*80)
@@ -672,7 +672,7 @@ class TaskPlanner(object):
 
                 # lift arm
                 temp_pose = self.pose_copy(grasp_pose)
-                temp_pose.position.z = 0.2
+                temp_pose.position.z = 0.3
                 print("-"*80)
                 print("temp_pose")
                 self.go_to_pose(temp_pose)
